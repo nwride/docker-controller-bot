@@ -323,7 +323,7 @@ def test_fixed_times_and_the_interval_are_one_choice():
 		text, markup = dcb.build_settings_update_when()
 		callbacks = harness.keyboard_callbacks(markup)
 		assert "settingsUpdateTimeRemove|0 4 * * *" in callbacks
-		assert "settingsUpdateTimeAdd" in callbacks
+		assert "settingsUpdateTimePick" in callbacks
 		assert "Próxima comprobación" in text
 		assert all(len(data.encode()) <= 64 for data in callbacks)
 
@@ -335,8 +335,8 @@ def test_fixed_times_and_the_interval_are_one_choice():
 		# are kept for when fixed times are chosen again.
 		assert dcb.apply_settings_text_value("check_update_every_hours", "6") is not None
 		assert dcb.update_check_times() == []
-		assert "settingsUpdateTimeAdd" not in harness.keyboard_callbacks(dcb.build_settings_update_when()[1])
-		dcb.choose_update_times(1, 1, 1)
+		assert "settingsUpdateTimePick" not in harness.keyboard_callbacks(dcb.build_settings_update_when()[1])
+		dcb.choose_update_times(1, 1)
 		assert dcb.update_check_times() == ["0 4 * * *", "30 16 * * *"]
 
 		# Without the last time there is nothing to go by: back to the interval.
@@ -350,17 +350,45 @@ def test_fixed_times_and_the_interval_are_one_choice():
 		_use_interval()
 
 
-def test_choosing_fixed_times_with_none_asks_for_one():
-	asked = []
-	original = dcb.ask_text_input
-	dcb.ask_text_input = lambda user_id, field, *args, **kwargs: asked.append(field)
+def test_choosing_fixed_times_with_none_shows_the_hours():
+	shown = []
+	original = dcb.render_settings
+	dcb.render_settings = lambda chat_id, message_id, screen="main": shown.append(screen)
 	try:
 		_use_interval()
-		dcb.choose_update_times(1, 1, 1)
-		assert asked == ["check_update_time"]
+		dcb.choose_update_times(1, 1)
+		assert shown == ["update_time_pick"]
 		assert store.get("bot.check_update_mode") == "interval", "sin horas no se puede elegir horas fijas"
 	finally:
-		dcb.ask_text_input = original
+		dcb.render_settings = original
+
+
+def test_an_hour_is_picked_with_one_tap_and_taken_away_with_another():
+	original = dcb.render_settings
+	dcb.render_settings = lambda *args, **kwargs: None
+	try:
+		_use_interval()
+		text, markup = dcb.build_settings_update_time_pick()
+		callbacks = harness.keyboard_callbacks(markup)
+		assert [f"settingsUpdateTimeToggle|{hour}" for hour in range(24)] == callbacks[:24]
+		assert "settingsUpdateTimeType" in callbacks, "las horas con minutos y los cron se escriben"
+
+		dcb.toggle_update_hour(1, 1, "4")
+		dcb.toggle_update_hour(1, 1, "16")
+		assert dcb.update_check_times() == ["0 4 * * *", "0 16 * * *"]
+		labels = [button.text for row in dcb.build_settings_update_time_pick()[1].keyboard for button in row]
+		assert "✅ 04:00" in labels and "05:00" in labels, labels
+
+		for bad in ("24", "-1", "hola", None):
+			dcb.toggle_update_hour(1, 1, bad)
+		assert dcb.update_check_times() == ["0 4 * * *", "0 16 * * *"], "una hora que no existe no se guarda"
+
+		dcb.toggle_update_hour(1, 1, "4")
+		dcb.toggle_update_hour(1, 1, "16")
+		assert store.get("bot.check_update_mode") == "interval", "sin horas se vuelve al intervalo"
+	finally:
+		dcb.render_settings = original
+		_use_interval()
 
 
 def test_hand_edited_update_times_fall_back_to_the_interval():
@@ -711,6 +739,7 @@ def test_every_settings_screen_offers_back_and_close():
 		"settings": dcb.build_settings()[1],
 		"updates": dcb.build_settings_updates()[1],
 		"update_when": dcb.build_settings_update_when()[1],
+		"update_time_pick": dcb.build_settings_update_time_pick()[1],
 		"language": dcb.build_language_keyboard(),
 		"columns": harness.capture_edit(dcb, dcb.show_settings_columns, 1, 2)[1],
 	}

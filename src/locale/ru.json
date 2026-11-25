@@ -482,6 +482,8 @@
   "button_settings_update_every": "⏱️ - Каждые $1 ч",
   "button_settings_update_at_times": "🕓 - В фиксированное время",
   "button_settings_update_time_add": "➕ - Добавить время",
+  "button_settings_update_time_type": "✏️ - Ввести другое время",
+  "settings_pick_time_help": "Нажмите на время, чтобы добавить его, и ещё раз, чтобы убрать. Время с минутами, например 04:30, или cron введите вручную.",
   "button_settings_update_time_remove": "🗑️ - Убрать · $1",
   "settings_row_containers": "📦 - По контейнерам",
   "settings_containers_title": "📦 <b>Обновления по контейнерам</b>",

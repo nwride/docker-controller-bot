@@ -482,6 +482,8 @@
   "button_settings_update_every": "⏱️ - Ogni $1 h",
   "button_settings_update_at_times": "🕓 - A orari fissi",
   "button_settings_update_time_add": "➕ - Aggiungi orario",
+  "button_settings_update_time_type": "✏️ - Scrivi un altro orario",
+  "settings_pick_time_help": "Tocca un orario per aggiungerlo, e di nuovo per toglierlo. Per un orario con i minuti, come 04:30, o un cron, scrivilo.",
   "button_settings_update_time_remove": "🗑️ - Rimuovi · $1",
   "settings_row_containers": "📦 - Per container",
   "settings_containers_title": "📦 <b>Aggiornamenti per container</b>",
