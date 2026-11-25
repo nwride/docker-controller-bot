@@ -202,7 +202,7 @@ def test_the_update_settings_live_on_their_own_screen():
 	assert len(text.strip().split("\n")) > 1, "la pantalla necesita su frase explicativa"
 	assert harness.keyboard_callbacks(markup) == [
 		"settingsToggle|check_updates",
-		"settingsAskInterval",
+		"settingsUpdateWhen",
 		"settingsToggle|check_update_stopped_containers",
 		"settingsContainers",
 		"settings",
@@ -274,6 +274,169 @@ def test_an_interval_that_is_not_a_number_falls_back_everywhere():
 			dcb.build_starting_message()
 	finally:
 		store.set("bot.check_update_every_hours", 4)
+
+
+def _use_interval():
+	"""Back to checking every 4 h, with no time kept: what the other tests expect."""
+	store.set("bot.check_update_mode", "interval")
+	store.set("bot.check_update_times", [])
+	store.set("bot.check_update_every_hours", 4)
+
+
+def test_an_update_time_is_a_time_of_day_or_a_cron():
+	assert dcb.parse_update_time("4") == "0 4 * * *"
+	assert dcb.parse_update_time("04:30") == "30 4 * * *"
+	assert dcb.parse_update_time(" 0  4 * * 1-5 ") == "0 4 * * 1-5", "los espacios de más no cuentan"
+	assert dcb.parse_update_time("@daily") == "@daily"
+	for bad in ("24:00", "4:60", "4:5", "", "hola", "@reboot", "0 0 30 2 *", "0 4 * * * *",
+				"0 0,1,2,3,4,5,6,7,8,9,10,11,12 * * *"):
+		try:
+			dcb.parse_update_time(bad)
+		except ValueError:
+			continue
+		raise AssertionError(f"{bad!r} no debería aceptarse")
+
+	assert dcb.describe_update_time("30 4 * * *") == "04:30"
+	assert dcb.describe_update_time("0 4 * * 1-5") == "0 4 * * 1-5"
+	assert dcb.describe_update_time("0 4,16 * * *") == "0 4,16 * * *"
+
+
+def test_fixed_times_and_the_interval_are_one_choice():
+	"""
+	Both at once would check every few hours and at the times as well, and the
+	times would mean nothing. Choosing one is leaving the other.
+	"""
+	sent = []
+	original = (dcb.send_message, dcb.render_settings)
+	dcb.send_message = lambda *args, **kwargs: sent.append(kwargs.get("message"))
+	dcb.render_settings = lambda *args, **kwargs: None
+	try:
+		store.set("bot.check_updates", True)
+		assert dcb.update_check_times() == []
+		assert dcb.apply_settings_text_value("check_update_time", "04:00") is not None
+		assert dcb.apply_settings_text_value("check_update_time", "16:30") is not None
+		assert dcb.update_check_times() == ["0 4 * * *", "30 16 * * *"]
+		assert "04:00, 16:30" in dcb.build_starting_message()
+
+		row = [button.text for button in dcb.build_settings_updates()[1].keyboard[1]][0]
+		assert "04:00, 16:30" in row and "cada" not in row, row
+		text, markup = dcb.build_settings_update_when()
+		callbacks = harness.keyboard_callbacks(markup)
+		assert "settingsUpdateTimeRemove|0 4 * * *" in callbacks
+		assert "settingsUpdateTimeAdd" in callbacks
+		assert "Próxima comprobación" in text
+		assert all(len(data.encode()) <= 64 for data in callbacks)
+
+		# The same time twice is said, not stored twice.
+		assert dcb.apply_settings_text_value("check_update_time", "4") is None
+		assert store.get("bot.check_update_times") == ["0 4 * * *", "30 16 * * *"]
+
+		# Answering the interval is choosing it: the times stop applying, but
+		# are kept for when fixed times are chosen again.
+		assert dcb.apply_settings_text_value("check_update_every_hours", "6") is not None
+		assert dcb.update_check_times() == []
+		assert "settingsUpdateTimeAdd" not in harness.keyboard_callbacks(dcb.build_settings_update_when()[1])
+		dcb.choose_update_times(1, 1, 1)
+		assert dcb.update_check_times() == ["0 4 * * *", "30 16 * * *"]
+
+		# Without the last time there is nothing to go by: back to the interval.
+		dcb.remove_update_time(1, 1, "0 4 * * *")
+		assert dcb.update_check_times() == ["30 16 * * *"]
+		dcb.remove_update_time(1, 1, "30 16 * * *")
+		assert store.get("bot.check_update_mode") == "interval"
+		assert dcb.update_check_times() == []
+	finally:
+		dcb.send_message, dcb.render_settings = original
+		_use_interval()
+
+
+def test_choosing_fixed_times_with_none_asks_for_one():
+	asked = []
+	original = dcb.ask_text_input
+	dcb.ask_text_input = lambda user_id, field, *args, **kwargs: asked.append(field)
+	try:
+		_use_interval()
+		dcb.choose_update_times(1, 1, 1)
+		assert asked == ["check_update_time"]
+		assert store.get("bot.check_update_mode") == "interval", "sin horas no se puede elegir horas fijas"
+	finally:
+		dcb.ask_text_input = original
+
+
+def test_hand_edited_update_times_fall_back_to_the_interval():
+	"""A mode of "times" with nothing usable in it must not leave the bot never checking."""
+	try:
+		for stored in ([], ["hola"], ["@reboot"], "0 4 * * *", None):
+			store.set("bot.check_update_mode", "times")
+			store.set("bot.check_update_times", stored)
+			assert dcb.update_check_times() == [], stored
+			dcb.build_settings()
+			dcb.build_settings_update_when()
+			dcb.build_starting_message()
+	finally:
+		_use_interval()
+
+
+def test_at_fixed_times_the_interval_does_not_end_the_wait():
+	"""
+	The time coming round is what ends it, however short the interval kept from
+	before: the two do not add up.
+	"""
+	original = (dcb.UPDATE_CHECK_POLL_SECONDS, dcb.next_update_time)
+	dcb.UPDATE_CHECK_POLL_SECONDS = 0.02
+	dcb.next_update_time = lambda times, after: after + dcb.timedelta(seconds=0.3)
+	try:
+		store.set("bot.check_updates", True)
+		store.set("bot.check_update_every_hours", 0.00001)
+		store.set("bot.check_update_mode", "times")
+		store.set("bot.check_update_times", ["0 4 * * *"])
+		started = time.time()
+		dcb.wait_for_next_update_check()
+		assert 0.25 < time.time() - started < 2
+	finally:
+		dcb.UPDATE_CHECK_POLL_SECONDS, dcb.next_update_time = original
+		_use_interval()
+
+
+def test_at_fixed_times_the_bot_does_not_check_on_start():
+	"""
+	Checking on every start would update at whatever hour the bot was restarted.
+	A fresh install still checks at once, since that pass only fills the cache.
+	"""
+
+	class Waited(Exception):
+		pass
+
+	passes = []
+	original = (dcb.DockerUpdateMonitor._check_fleet, dcb.wait_for_next_update_check)
+	was_done = store.state_get("update_check_done")
+
+	def wait():
+		raise Waited()
+
+	def run():
+		try:
+			dcb.DockerUpdateMonitor().detectar_actualizaciones()
+		except Waited:
+			pass
+
+	dcb.DockerUpdateMonitor._check_fleet = lambda self, cold_cache: passes.append(cold_cache)
+	dcb.wait_for_next_update_check = wait
+	try:
+		store.set("bot.check_updates", True)
+		store.set("bot.check_update_mode", "times")
+		store.set("bot.check_update_times", ["0 4 * * *"])
+		store.state_set("update_check_done", True)
+		run()
+		assert passes == [], "a horas fijas no se comprueba al arrancar"
+
+		store.state_set("update_check_done", False)
+		run()
+		assert passes == [True], "una instalación nueva llena la caché al arrancar"
+	finally:
+		dcb.DockerUpdateMonitor._check_fleet, dcb.wait_for_next_update_check = original
+		store.state_set("update_check_done", was_done)
+		_use_interval()
 
 
 def test_the_channel_is_verified_before_being_saved():
@@ -547,6 +710,7 @@ def test_every_settings_screen_offers_back_and_close():
 	screens = {
 		"settings": dcb.build_settings()[1],
 		"updates": dcb.build_settings_updates()[1],
+		"update_when": dcb.build_settings_update_when()[1],
 		"language": dcb.build_language_keyboard(),
 		"columns": harness.capture_edit(dcb, dcb.show_settings_columns, 1, 2)[1],
 	}

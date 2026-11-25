@@ -909,10 +909,38 @@ def cb_settingsSetColumns(ctx):
 	core.render_settings(ctx.chatId, ctx.messageId)
 
 @callback(
+	name='settingsUpdateWhen',
+	keeps_message=True,
+)
+def cb_settingsUpdateWhen(ctx):
+	core.render_settings(ctx.chatId, ctx.messageId, "update_when")
+
+@callback(
 	name='settingsAskInterval',
 )
 def cb_settingsAskInterval(ctx):
-	core.ask_text_input(ctx.userId, "check_update_every_hours", "settings_ask_interval", back_to="updates")
+	core.ask_text_input(ctx.userId, "check_update_every_hours", "settings_ask_interval", back_to="update_when")
+
+@callback(
+	name='settingsUpdateAtTimes',
+	keeps_message=True,
+)
+def cb_settingsUpdateAtTimes(ctx):
+	core.choose_update_times(ctx.userId, ctx.chatId, ctx.messageId)
+
+@callback(
+	name='settingsUpdateTimeAdd',
+)
+def cb_settingsUpdateTimeAdd(ctx):
+	core.ask_update_time(ctx.userId)
+
+@callback(
+	name='settingsUpdateTimeRemove',
+	params=('value',),
+	keeps_message=True,
+)
+def cb_settingsUpdateTimeRemove(ctx):
+	core.remove_update_time(ctx.chatId, ctx.messageId, ctx.value)
 
 @callback(
 	name='settingsAskChannel',

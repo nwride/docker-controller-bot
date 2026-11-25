@@ -232,7 +232,7 @@ Everything else is configured from the bot itself and stored in `settings.json`,
 |Extended messages| Show more information messages. Disabled by default |
 |Multiple selection| Whether the `/run`, `/stop` and `/restart` menus stay open so you can act on several containers in a row. Enabled by default |
 |Check for updates| Enabled by default |
-|Check interval| Hours between checks. Decimals are accepted. Default is 4 |
+|When to check| Every so many hours (decimals are accepted, default is 4) or at fixed times, one or the other. Fixed times can be as many as you like, as a time (`04:00`) or as a cron (`0 4 * * 1-5`), and the bot does not check on start, only at those times |
 |Stopped containers| Whether stopped containers are checked for updates too. Enabled by default |
 |Per container| Which containers update on their own and which aren't checked. Also from each one's `/info`. None by default: it tells you about all of them |
 |Notification channel| Channel where container status changes are exclusively published (start, stop, creation and automatic updates). Management still happens in the private chat with the bot or in TELEGRAM_GROUP. The bot verifies it can post there before saving it |

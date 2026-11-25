@@ -46,6 +46,10 @@ DEFAULTS = {
 		"notification_channel": "",
 		"check_updates": True,
 		"check_update_every_hours": 4.0,
+		# "interval" checks every check_update_every_hours, "times" only at the
+		# crons in check_update_times. See core.update_check_times.
+		"check_update_mode": "interval",
+		"check_update_times": [],
 		"check_update_stopped_containers": True,
 		# Anonymous usage statistics, sent once a day. See telemetry.py.
 		"telemetry": True,

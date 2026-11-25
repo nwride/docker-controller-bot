@@ -23,6 +23,7 @@ import store
 import telemetry
 import unraid
 from config import *
+from croniter import croniter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -31,14 +32,14 @@ from telebot.types import InlineKeyboardButton
 from telebot.types import InlineKeyboardMarkup
 from compose_generator import ComposeGenerator
 from formatting import (
-	EVENT_LOG_LINES, by_host, render_container_info, comparison_body, container_line, describe_exit_code, human_duration, log_excerpt, release_notes_url, telegram_head, telegram_tail, version_lines,
+	EVENT_LOG_LINES, by_host, render_container_info, comparison_body, container_line, day_and_time, describe_exit_code, human_duration, log_excerpt, release_notes_url, telegram_head, telegram_tail, version_lines,
 )
 from docker_update import container_platform, extract_container_config, image_repository, image_version, perform_update, pull_checked, stop_container, updates_in_progress
 from docker_compose_manager import (
     ComposeDetector,
     ComposeProjectManager
 )
-from schedule_manager import ScheduleManager
+from schedule_manager import ScheduleManager, is_valid_cron
 from own_container import candidates as own_container_ids
 from port_manager import PortManager
 import callback_registry
@@ -2062,27 +2063,105 @@ def update_interval_hours():
 	except (TypeError, ValueError):
 		return 4.0
 
+# How long a cron of the update times can be. The cron travels in the callback
+# data of the button that removes it, and that has to fit in Telegram's 64 bytes
+# with the callback's name in front.
+MAX_UPDATE_TIME_LENGTH = 32
+
+def is_update_time(cron):
+	"""
+	Whether `cron` can be one of the update times: a cron /schedule would take,
+	short enough for its button, and not @reboot, which is not a time of day.
+	"""
+	return (isinstance(cron, str) and len(cron) <= MAX_UPDATE_TIME_LENGTH
+			and cron != "@reboot" and is_valid_cron(cron))
+
+def kept_update_times():
+	"""
+	Every usable update time stored, in force or not: they are kept while the
+	interval is chosen, for when fixed times are chosen again.
+	"""
+	times = store.get("bot.check_update_times")
+	if not isinstance(times, list):
+		return []
+	return [cron for cron in times if is_update_time(cron)]
+
+def update_check_times():
+	"""
+	The crons the update check runs at, or an empty list when it runs every so
+	many hours instead.
+
+	The two are one choice and never add up: at fixed times the interval is not
+	used at all. A mode of "times" with no usable time left, after a hand edit,
+	falls back to the interval rather than never checking again.
+	"""
+	if store.get("bot.check_update_mode") != "times":
+		return []
+	return kept_update_times()
+
+def parse_update_time(raw):
+	"""
+	Reads a typed update time as the cron it is kept as, raising ValueError when
+	it is not one.
+
+	A time of day is what most people want, so 4, 4:00 and 04:30 mean every day
+	at that time. Anything else has to be a cron.
+	"""
+	text = " ".join(str(raw).split())
+	match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?", text)
+	if match:
+		hour, minute = int(match[1]), int(match[2] or 0)
+		if hour > 23 or minute > 59:
+			raise ValueError(f"not a time of day: {raw!r}")
+		return f"{minute} {hour} * * *"
+	if not is_update_time(text):
+		raise ValueError(f"not an update time: {raw!r}")
+	return text
+
+def describe_update_time(cron):
+	"""A daily time as 04:00, the way it was most likely typed; any other cron as it is."""
+	fields = cron.split()
+	if len(fields) == 5 and fields[2:] == ["*", "*", "*"] and fields[0].isdigit() and fields[1].isdigit():
+		return f"{int(fields[1]):02d}:{int(fields[0]):02d}"
+	return cron
+
+def next_update_time(times, after):
+	"""The first moment after `after` that one of `times` comes round."""
+	return min(croniter(cron, after).get_next(datetime) for cron in times)
+
 def wait_for_next_update_check():
 	"""
-	Waits out the configured interval between update checks, in short steps.
+	Waits until the next update check is due, in short steps.
 
-	The interval is hours long and is read again on every step, so shortening it
-	from /settings applies during the current wait rather than after it. The wait
-	also ends early when update checks are switched off.
+	Due is once the configured interval has gone by or, at fixed times, once one
+	of them has come round since the wait began. Both are read again on every
+	step, so a change made from /settings, switching between the two included,
+	applies during the current wait rather than after it. The wait also ends
+	early when update checks are switched off.
 	"""
+	started = datetime.now()
 	waited = 0.0
-	logged_interval = None
+	logged = None
 	while True:
 		if not store.get("bot.check_updates"):
 			return
-		interval_hours = update_interval_hours()
-		target = max(interval_hours * 3600, UPDATE_CHECK_POLL_SECONDS)
-		if interval_hours != logged_interval:
-			debug(f"Waiting {interval_hours} hours for the next update check...")
-			logged_interval = interval_hours
-		if waited >= target:
-			return
-		step = min(UPDATE_CHECK_POLL_SECONDS, target - waited)
+		times = update_check_times()
+		if times:
+			if times != logged:
+				debug(f"Waiting for the next update check at {', '.join(times)}...")
+				logged = times
+			if next_update_time(times, started) <= datetime.now():
+				return
+			step = UPDATE_CHECK_POLL_SECONDS
+		else:
+			interval_hours = update_interval_hours()
+			target = max(interval_hours * 3600, UPDATE_CHECK_POLL_SECONDS)
+			if interval_hours != logged:
+				debug(f"Waiting {interval_hours} hours for the next update check...")
+				logged = interval_hours
+			if waited >= target:
+				return
+			step = min(UPDATE_CHECK_POLL_SECONDS, target - waited)
 		time.sleep(step)
 		waited += step
 
@@ -2104,6 +2183,12 @@ class DockerUpdateMonitor:
 		self._failed = 0
 
 	def detectar_actualizaciones(self):
+		# At fixed times the first pass waits for its time too: checking on every
+		# start would update at whatever hour the bot happened to be restarted,
+		# which is what choosing the times is for. Not on a fresh install, whose
+		# first pass only fills the cache.
+		if update_check_times() and store.update_check_done():
+			wait_for_next_update_check()
 		while True:
 			if not store.get("bot.check_updates"):
 				# The daemon runs even with checks disabled so that turning them
@@ -2666,7 +2751,6 @@ def build_settings():
 	"""
 	locale_code = language().upper()
 	channel = notification_channel()
-	interval = _format_interval(update_interval_hours())
 
 	markup = InlineKeyboardMarkup(row_width=1)
 	markup.add(InlineKeyboardButton(
@@ -2678,8 +2762,8 @@ def build_settings():
 	markup.add(_toggle_button("extended_messages"))
 	markup.add(_toggle_button("multi_selection"))
 	markup.add(InlineKeyboardButton(
-		get_text("settings_row_updates_on", interval) if store.get("bot.check_updates")
-		else get_text("settings_row_updates_off"),
+		update_schedule_text("settings_row_updates_on", "settings_row_updates_at")
+		if store.get("bot.check_updates") else get_text("settings_row_updates_off"),
 		callback_data="settingsUpdates"))
 	markup.add(InlineKeyboardButton(get_text("settings_row_notifications"), callback_data="settingsNotifications"))
 	markup.add(InlineKeyboardButton(
@@ -2720,14 +2804,79 @@ def build_settings_updates():
 	markup = InlineKeyboardMarkup(row_width=1)
 	markup.add(_toggle_button("check_updates"))
 	markup.add(InlineKeyboardButton(
-		get_text("settings_row_interval", _format_interval(update_interval_hours())),
-		callback_data="settingsAskInterval"))
+		update_schedule_text("settings_row_when_every", "settings_row_when_at"),
+		callback_data="settingsUpdateWhen"))
 	markup.add(_toggle_button("check_update_stopped_containers"))
 	markup.add(InlineKeyboardButton(get_text("settings_row_containers"), callback_data="settingsContainers"))
 	_add_navigation(markup, "settings")
 
 	text = f'{get_text("settings_updates_title")}\n\n{get_text("settings_updates_help")}'
 	return text, markup
+
+def update_schedule_text(every_key, at_key):
+	"""
+	When the checks run, through whichever of the two texts fits: `every_key`
+	with the interval, or `at_key` with the fixed times.
+	"""
+	times = update_check_times()
+	if times:
+		return get_text(at_key, ", ".join(describe_update_time(cron) for cron in times))
+	return get_text(every_key, _format_interval(update_interval_hours()))
+
+def build_settings_update_when():
+	"""
+	When the update check runs: every so many hours, or at fixed times.
+
+	One screen for both because they are one choice, and the mark says which is
+	in force. The times are listed only while they are: shown under the
+	interval, they read as something that also applies.
+	"""
+	times = update_check_times()
+	markup = InlineKeyboardMarkup(row_width=1)
+	markup.add(InlineKeyboardButton(
+		f'{_selected_prefix(not times)}{get_text("button_settings_update_every", _format_interval(update_interval_hours()))}',
+		callback_data="settingsAskInterval"))
+	markup.add(InlineKeyboardButton(
+		f'{_selected_prefix(bool(times))}{get_text("button_settings_update_at_times")}',
+		callback_data="settingsUpdateAtTimes"))
+	for cron in times:
+		markup.add(InlineKeyboardButton(
+			get_text("button_settings_update_time_remove", describe_update_time(cron)),
+			callback_data=f"settingsUpdateTimeRemove|{cron}"))
+	if times:
+		markup.add(InlineKeyboardButton(get_text("button_settings_update_time_add"), callback_data="settingsUpdateTimeAdd"))
+	_add_navigation(markup, "settingsUpdates")
+
+	text = f'{get_text("settings_when_title")}\n\n{get_text("settings_when_help")}'
+	if times and store.get("bot.check_updates"):
+		text += f'\n\n{get_text("settings_when_next", day_and_time(next_update_time(times, datetime.now())))}'
+	return text, markup
+
+def ask_update_time(user_id):
+	"""Asks for a time to add, coming back to the times once it is answered."""
+	ask_text_input(user_id, "check_update_time", "settings_ask_update_time", back_to="update_when")
+
+def choose_update_times(user_id, chat_id, message_id):
+	"""
+	Switches the checks to fixed times. With none kept from an earlier time it
+	asks for the first one, since fixed times with none to go by is no choice.
+	"""
+	if not kept_update_times():
+		ask_update_time(user_id)
+		return
+	store.set("bot.check_update_mode", "times")
+	render_settings(chat_id, message_id, "update_when")
+
+def remove_update_time(chat_id, message_id, cron):
+	"""
+	Takes one time off the list. Without the last one the checks go back to the
+	interval: fixed times with none left would never check again.
+	"""
+	times = [kept for kept in kept_update_times() if kept != cron]
+	store.set("bot.check_update_times", times)
+	if not times:
+		store.set("bot.check_update_mode", "interval")
+	render_settings(chat_id, message_id, "update_when")
 
 def _checks_off_warning():
 	"""What a per-container choice needs said while the checks are off."""
@@ -3285,6 +3434,8 @@ def build_settings_screen(screen):
 	"""Builds one of the settings screens by name."""
 	if screen == "updates":
 		return build_settings_updates()
+	if screen == "update_when":
+		return build_settings_update_when()
 	if screen == "hosts":
 		return build_settings_hosts()
 	if screen == "telemetry":
@@ -3449,6 +3600,22 @@ def apply_settings_text_value(field, raw):
 			send_message(message=get_text("settings_invalid_interval"))
 			return None
 		store.set("bot.check_update_every_hours", hours)
+		# Asked from "every so many hours", so answering it is choosing that.
+		store.set("bot.check_update_mode", "interval")
+		return get_text("settings_updated")
+
+	if field == "check_update_time":
+		try:
+			cron = parse_update_time(raw)
+		except ValueError:
+			send_message(message=get_text("settings_invalid_update_time"))
+			return None
+		times = kept_update_times()
+		if cron in times:
+			send_message(message=get_text("settings_update_time_repeated", html.escape(describe_update_time(cron))))
+			return None
+		store.set("bot.check_update_times", times + [cron])
+		store.set("bot.check_update_mode", "times")
 		return get_text("settings_updated")
 
 	if field == "host_add":
@@ -3604,8 +3771,7 @@ def build_starting_message():
 	# The one setting that belongs here: it is the only one that changes what
 	# the bot does on its own while nobody is looking.
 	if store.get("bot.check_updates"):
-		lines.append(get_text("starting_updates_on",
-								_format_interval(update_interval_hours())))
+		lines.append(update_schedule_text("starting_updates_on", "starting_updates_at"))
 	else:
 		lines.append(get_text("starting_updates_off"))
 	lines.append(get_text("channel"))

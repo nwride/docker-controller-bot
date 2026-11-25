@@ -122,7 +122,7 @@ En el compose solo van las variables que el bot necesita **antes** de poder leer
 | `TELEGRAM_THREAD` | ❌ | Tema dentro de un supergrupo (2, 3, 4…). Por defecto 1. Se usa junto a `TELEGRAM_GROUP` |
 | `TELEMETRY` | ❌ | `false` para desactivar las estadísticas anónimas sin pasar por `/settings` |
 
-Todo lo demás se cambia desde **`/settings`** y se aplica al momento: idioma, columnas de botones, mensajes ampliados, selección múltiple, comprobación de actualizaciones (si se hace, cada cuántas horas, si incluye los contenedores parados y qué hace con cada contenedor), canal de notificaciones, hosts de Docker y estadísticas.
+Todo lo demás se cambia desde **`/settings`** y se aplica al momento: idioma, columnas de botones, mensajes ampliados, selección múltiple, comprobación de actualizaciones (si se hace, cada cuántas horas o a qué horas, si incluye los contenedores parados y qué hace con cada contenedor), canal de notificaciones, hosts de Docker y estadísticas.
 
 **¿Necesitas `docker login`?** Mapea tu `~/.docker/config.json` en `/root/.docker/config.json` y el bot usará esas credenciales para descargar imágenes.
 

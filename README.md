@@ -239,7 +239,7 @@ Todo lo demás se configura desde el propio bot y se guarda en `settings.json`, 
 |Mensajes ampliados| Muestra más mensajes de información. Por defecto desactivado |
 |Selección múltiple| En `/run`, `/stop` y `/restart` el menú se queda abierto para actuar sobre varios contenedores seguidos. Por defecto activado |
 |Comprobar actualizaciones| Por defecto activado |
-|Intervalo de comprobación| Horas entre comprobaciones. Acepta decimales. Por defecto 4 |
+|Cuándo comprobar| Cada cierto número de horas (acepta decimales, por defecto 4) o a horas fijas, una cosa o la otra. A horas fijas se añaden tantas como se quiera, como una hora (`04:00`) o como un cron (`0 4 * * 1-5`), y el bot no comprueba al arrancar, solo a esas horas |
 |Contenedores parados| Si comprueba también las actualizaciones de los contenedores detenidos. Por defecto activado |
 |Por contenedor| Qué contenedores se actualizan solos y cuáles no se comprueban. También desde el `/info` de cada uno. Por defecto ninguno: avisa de todos |
 |Canal de notificaciones| Canal donde se publicarán exclusivamente los cambios de estado de los contenedores (arranque, parada, creación y actualizaciones automáticas). La gestión se sigue haciendo desde el chat privado con el bot o desde TELEGRAM_GROUP. El bot comprueba que puede publicar ahí antes de guardarlo |
