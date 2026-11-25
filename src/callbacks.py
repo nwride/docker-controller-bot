@@ -926,12 +926,27 @@ def cb_settingsAskInterval(ctx):
 	keeps_message=True,
 )
 def cb_settingsUpdateAtTimes(ctx):
-	core.choose_update_times(ctx.userId, ctx.chatId, ctx.messageId)
+	core.choose_update_times(ctx.chatId, ctx.messageId)
 
 @callback(
-	name='settingsUpdateTimeAdd',
+	name='settingsUpdateTimePick',
+	keeps_message=True,
 )
-def cb_settingsUpdateTimeAdd(ctx):
+def cb_settingsUpdateTimePick(ctx):
+	core.render_settings(ctx.chatId, ctx.messageId, "update_time_pick")
+
+@callback(
+	name='settingsUpdateTimeToggle',
+	params=('value',),
+	keeps_message=True,
+)
+def cb_settingsUpdateTimeToggle(ctx):
+	core.toggle_update_hour(ctx.chatId, ctx.messageId, ctx.value)
+
+@callback(
+	name='settingsUpdateTimeType',
+)
+def cb_settingsUpdateTimeType(ctx):
 	core.ask_update_time(ctx.userId)
 
 @callback(

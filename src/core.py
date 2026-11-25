@@ -2099,6 +2099,19 @@ def update_check_times():
 		return []
 	return kept_update_times()
 
+def save_update_times(times):
+	"""
+	Stores the update times and puts them in force. With none left the checks
+	go back to the interval: fixed times with nothing to go by would never
+	check again.
+	"""
+	store.set("bot.check_update_times", times)
+	store.set("bot.check_update_mode", "times" if times else "interval")
+
+def daily_update_time(hour, minute=0):
+	"""The cron of every day at `hour`:`minute`, as a typed time is kept."""
+	return f"{minute} {hour} * * *"
+
 def parse_update_time(raw):
 	"""
 	Reads a typed update time as the cron it is kept as, raising ValueError when
@@ -2113,7 +2126,7 @@ def parse_update_time(raw):
 		hour, minute = int(match[1]), int(match[2] or 0)
 		if hour > 23 or minute > 59:
 			raise ValueError(f"not a time of day: {raw!r}")
-		return f"{minute} {hour} * * *"
+		return daily_update_time(hour, minute)
 	if not is_update_time(text):
 		raise ValueError(f"not an update time: {raw!r}")
 	return text
@@ -2844,7 +2857,7 @@ def build_settings_update_when():
 			get_text("button_settings_update_time_remove", describe_update_time(cron)),
 			callback_data=f"settingsUpdateTimeRemove|{cron}"))
 	if times:
-		markup.add(InlineKeyboardButton(get_text("button_settings_update_time_add"), callback_data="settingsUpdateTimeAdd"))
+		markup.add(InlineKeyboardButton(get_text("button_settings_update_time_add"), callback_data="settingsUpdateTimePick"))
 	_add_navigation(markup, "settingsUpdates")
 
 	text = f'{get_text("settings_when_title")}\n\n{get_text("settings_when_help")}'
@@ -2852,30 +2865,57 @@ def build_settings_update_when():
 		text += f'\n\n{get_text("settings_when_next", day_and_time(next_update_time(times, datetime.now())))}'
 	return text, markup
 
+def build_settings_update_time_pick():
+	"""
+	The hours of the day as buttons, for the times most people want: one tap
+	adds an hour and another takes it away. Anything finer, a time with minutes
+	or a cron, is typed from the button below them.
+	"""
+	times = update_check_times()
+	markup = InlineKeyboardMarkup(row_width=4)
+	markup.add(*[
+		InlineKeyboardButton(
+			f'{_selected_prefix(daily_update_time(hour) in times)}{hour:02d}:00',
+			callback_data=f"settingsUpdateTimeToggle|{hour}")
+		for hour in range(24)
+	])
+	markup.row(InlineKeyboardButton(get_text("button_settings_update_time_type"), callback_data="settingsUpdateTimeType"))
+	_add_navigation(markup, "settingsUpdateWhen")
+	return f'{get_text("settings_when_title")}\n\n{get_text("settings_pick_time_help")}', markup
+
 def ask_update_time(user_id):
-	"""Asks for a time to add, coming back to the times once it is answered."""
+	"""Asks for a time to type, coming back to the times once it is answered."""
 	ask_text_input(user_id, "check_update_time", "settings_ask_update_time", back_to="update_when")
 
-def choose_update_times(user_id, chat_id, message_id):
+def choose_update_times(chat_id, message_id):
 	"""
-	Switches the checks to fixed times. With none kept from an earlier time it
-	asks for the first one, since fixed times with none to go by is no choice.
+	Switches the checks to fixed times, the ones kept from an earlier time if
+	there are any. With none, it shows the hours to pick the first from, since
+	fixed times with nothing to go by is no choice.
 	"""
 	if not kept_update_times():
-		ask_update_time(user_id)
+		render_settings(chat_id, message_id, "update_time_pick")
 		return
 	store.set("bot.check_update_mode", "times")
 	render_settings(chat_id, message_id, "update_when")
 
+def toggle_update_hour(chat_id, message_id, hour):
+	"""Adds an hour picked from the buttons, or takes it away if it was there."""
+	try:
+		cron = daily_update_time(int(hour))
+	except (TypeError, ValueError):
+		warning(f"Ignored invalid update hour: {hour}")
+		return
+	if not is_update_time(cron):
+		warning(f"Ignored invalid update hour: {hour}")
+		return
+	times = update_check_times()
+	save_update_times([kept for kept in times if kept != cron] if cron in times else times + [cron])
+	render_settings(chat_id, message_id, "update_time_pick")
+
 def remove_update_time(chat_id, message_id, cron):
-	"""
-	Takes one time off the list. Without the last one the checks go back to the
-	interval: fixed times with none left would never check again.
-	"""
-	times = [kept for kept in kept_update_times() if kept != cron]
-	store.set("bot.check_update_times", times)
-	if not times:
-		store.set("bot.check_update_mode", "interval")
+	"""Takes one time off the list."""
+	save_update_times([kept for kept in update_check_times() if kept != cron])
 	render_settings(chat_id, message_id, "update_when")
 
 def _checks_off_warning():
@@ -3436,6 +3476,8 @@ def build_settings_screen(screen):
 		return build_settings_updates()
 	if screen == "update_when":
 		return build_settings_update_when()
+	if screen == "update_time_pick":
+		return build_settings_update_time_pick()
 	if screen == "hosts":
 		return build_settings_hosts()
 	if screen == "telemetry":
@@ -3610,12 +3652,11 @@ def apply_settings_text_value(field, raw):
 		except ValueError:
 			send_message(message=get_text("settings_invalid_update_time"))
 			return None
-		times = kept_update_times()
+		times = update_check_times()
 		if cron in times:
 			send_message(message=get_text("settings_update_time_repeated", html.escape(describe_update_time(cron))))
 			return None
-		store.set("bot.check_update_times", times + [cron])
-		store.set("bot.check_update_mode", "times")
+		save_update_times(times + [cron])
 		return get_text("settings_updated")
 
 	if field == "host_add":

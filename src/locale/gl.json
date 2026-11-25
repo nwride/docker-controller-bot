@@ -482,6 +482,8 @@
   "button_settings_update_every": "⏱️ - Cada $1 h",
   "button_settings_update_at_times": "🕓 - A horas fixas",
   "button_settings_update_time_add": "➕ - Engadir hora",
+  "button_settings_update_time_type": "✏️ - Escribir outra hora",
+  "settings_pick_time_help": "Toca unha hora para engadila, e outra vez para quitala. Para unha hora con minutos, como 04:30, ou un cron, escríbea.",
   "button_settings_update_time_remove": "🗑️ - Quitar · $1",
   "settings_row_containers": "📦 - Por contedor",
   "settings_containers_title": "📦 <b>Actualizacións por contedor</b>",
